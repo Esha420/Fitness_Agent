@@ -2,3 +2,5 @@
 __init__.py
 /.env
 /venv311
+__pycache__/
+__pycache__
