@@ -1,0 +1,8 @@
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  resource: agent
+  version: default
+  rules:
+    - actions: ["call"]
+      roles: ["agent"]
+      effect: EFFECT_ALLOW

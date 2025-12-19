@@ -1,0 +1,11 @@
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  resource: profile
+  version: default
+  rules:
+    - actions: ["read", "update"]
+      roles: ["user"]
+      effect: EFFECT_ALLOW
+      condition:
+        match:
+          expr: request.resource.attr.user_id == request.principal.id
