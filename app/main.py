@@ -18,7 +18,7 @@ user_id, role = get_current_user()
 # -------------------------------------------------
 def init_session():
     if "profile_id" not in st.session_state:
-        profile_id = 1  # logical profile per user
+        profile_id = f"profile-{user_id}"
         profile = get_profile(profile_id, user_id)
 
         if not profile:
@@ -33,12 +33,17 @@ def init_session():
             user_id
         )
 
-
 init_session()
 
 if st.session_state.profile is None:
     st.error("Profile could not be loaded")
     st.stop()
+
+with st.sidebar:
+    if st.button("Logout"):
+        for key in ["authenticated", "user_id", "role", "profile", "notes"]:
+            st.session_state.pop(key, None)
+        st.rerun()
 
 
 # -------------------------------------------------
