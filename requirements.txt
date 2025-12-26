@@ -6,3 +6,5 @@ streamlit
 pytest
 pytest-mock
 cerbos
+mcp
+simpleeval

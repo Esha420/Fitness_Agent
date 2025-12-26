@@ -20,7 +20,7 @@ def verify_password(password: str, hashed: str) -> bool:
 def signup():
     st.subheader("Sign Up")
 
-    email = st.text_input("Email", key="signup_email")
+    email = st.text_input("User Name", key="signup_email")
     password = st.text_input("Password", type="password", key="signup_pw")
     confirm = st.text_input("Confirm Password", type="password", key="signup_confirm")
 
@@ -55,7 +55,7 @@ def signup():
 def login():
     st.subheader("Login")
 
-    email = st.text_input("Email", key="login_email")
+    email = st.text_input("User Name", key="login_email")
     password = st.text_input("Password", type="password", key="login_pw")
 
     if st.button("Login"):

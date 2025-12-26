@@ -1,17 +1,15 @@
-#app/ai.py
-import requests
-import uuid, json
-import os
+# app/ai.py
 import time
+import json
 from datetime import datetime
+from app.mcp_client import get_mcp_tools
+from app.cerbos_client import check_access
+from app.mcp_authorization import MCP_AUTHZ
 from app.mcp_metrics import log_mcp_event
 
-LANGFLOW_ID = os.getenv("LANGFLOW_ID")
-TOKEN = os.getenv("LANGFLOW_TOKEN")
-ORG_ID = os.getenv("ASTRA_ORG_ID")
-REGION = os.getenv("LANGFLOW_REGION")
-
-BASE_URL = f"https://{REGION}.langflow.datastax.com"
+# Load tools once
+TOOLS = get_mcp_tools()
+FLOW_TOOLS = {tool.name: tool for tool in TOOLS.values()}
 
 def build_mcp_context(user_id, profile):
     return {
@@ -20,70 +18,95 @@ def build_mcp_context(user_id, profile):
         "timestamp": datetime.utcnow().isoformat()
     }
 
-def _run_langflow(endpoint, tweaks):
-    url = f"{BASE_URL}/lf/{LANGFLOW_ID}/api/v1/run/{endpoint}"
-    payload = {
-        "input_type": "text",
-        "output_type": "text",
-        "session_id": str(uuid.uuid4()),
-        "tweaks": tweaks
-    }
-
-    headers = {
-        "Authorization": f"Bearer {TOKEN}",
-        "X-DataStax-Current-Org": ORG_ID,
-        "Content-Type": "application/json"
-    }
-
-    r = requests.post(url, json=payload, headers=headers)
-    r.raise_for_status()
-    return r.json()["outputs"][0]["outputs"][0]["results"]["text"]["data"]["text"]
-
-def ask_ai(profile, question, user_id):
+# -------------------------------------------------
+# Ask AI (QA Flow)
+# -------------------------------------------------
+async def ask_ai(profile, question, user_id):
     start = time.time()
+    status = "success"
+
     try:
-        response = _run_langflow(
-            "runflow",
-            {
-                "TextInput-osEzK": {"input_value": question},
-                "MCPContext": {"context": build_mcp_context(user_id, profile)}
-            }
+        auth = MCP_AUTHZ["ask_ai"]
+
+        allowed = check_access(
+            principal_id=user_id,
+            role=auth["role"],
+            action=auth["action"],
+            resource_kind=auth["resource"],
+            resource_id=auth["resource_id"],
         )
-        status = "success"
-        return response
+
+        if not allowed:
+            raise PermissionError("Cerbos denied ask_ai")
+
+        tool = FLOW_TOOLS["ask_ai"]
+
+        return await tool.arun({
+            "question": question,
+            "context": build_mcp_context(user_id, profile),
+        })
+
+    except Exception:
+        status = "error"
+        raise
+
     finally:
         log_mcp_event({
             "user_id": user_id,
             "agent": "qa-agent",
             "latency_ms": int((time.time() - start) * 1000),
-            "status": status
+            "status": status,
         })
 
-def get_macros(profile, goals, user_id):
-    """
-    AI macro generation (secured + MCP logged)
-    """
+
+
+# -------------------------------------------------
+# Macro Generation Flow
+# -------------------------------------------------
+async def get_macros(profile, goals, user_id):
     start = time.time()
     status = "success"
 
     try:
-        result = _run_langflow(
-            "macros",
-            {
-                "TextInput-V0W1U": {"input_value": ", ".join(goals)},
-                "MCPContext": {
-                    "context": build_mcp_context(user_id, profile)
-                }
-            }
+        auth = MCP_AUTHZ["macro"]
+
+        allowed = check_access(
+            principal_id=user_id,
+            role=auth["role"],
+            action=auth["action"],
+            resource_kind=auth["resource"],
+            resource_id=auth["resource_id"],
         )
-        return json.loads(result)
+
+        if not allowed:
+            raise PermissionError("Cerbos denied macro")
+
+        tool = FLOW_TOOLS["macro"]
+
+        result = await tool.arun({
+            "goals": ", ".join(goals),
+            "context": build_mcp_context(user_id, profile),
+        })
+        if isinstance(result, list):
+            for item in result:
+                if "text" in item:
+                    return item["text"]
+            return ""  # fallback if no text found
+        elif isinstance(result, dict) and "text" in result:
+            return result["text"]
+        elif isinstance(result, str):
+            return result
+        else:
+            return ""
+
     except Exception:
         status = "error"
         raise
+
     finally:
         log_mcp_event({
             "user_id": user_id,
             "agent": "macro-agent",
             "latency_ms": int((time.time() - start) * 1000),
-            "status": status
+            "status": status,
         })
