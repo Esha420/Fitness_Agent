@@ -1,8 +1,14 @@
+#mcp_metrics.py
+from app.db import mcp_metrics_collection
 from datetime import datetime
-from app.db import db
 
-metrics_collection = db.get_collection("mcp_metrics")
-
-def log_mcp_event(event):
+def log_mcp_event(event: dict):
+    """
+    Persist telemetry events safely.
+    """
     event["timestamp"] = datetime.utcnow().isoformat()
-    metrics_collection.insert_one(event)
+
+    try:
+        mcp_metrics_collection.insert_one(event)
+    except Exception as e:
+        print(f"[WARN] Failed to log MCP event: {e}")

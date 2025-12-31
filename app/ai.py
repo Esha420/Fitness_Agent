@@ -1,112 +1,81 @@
-# app/ai.py
-import time
-import json
 from datetime import datetime
 from app.mcp_client import get_mcp_tools
 from app.cerbos_client import check_access
 from app.mcp_authorization import MCP_AUTHZ
-from app.mcp_metrics import log_mcp_event
+from app.telmetry import trace_span, get_current_trace_id
+from app.auth_tokens import verify_token
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-# Load tools once
 TOOLS = get_mcp_tools()
 FLOW_TOOLS = {tool.name: tool for tool in TOOLS.values()}
 
-def build_mcp_context(user_id, profile):
+def build_mcp_context(user_id, role, profile):
+    carrier = {}
+    TraceContextTextMapPropagator().inject(carrier)
+
     return {
+        "trace_context": carrier,
         "user_id": user_id,
+        "role": role,
         "profile": profile,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
+        "trace_id": get_current_trace_id(),
     }
 
-# -------------------------------------------------
-# Ask AI (QA Flow)
-# -------------------------------------------------
-async def ask_ai(profile, question, user_id):
-    start = time.time()
-    status = "success"
+async def ask_ai(profile, question, token):
+    with trace_span("ai.ask_ai.total", "anonymous"):
+        with trace_span("auth.jwt.verify", "anonymous"):
+            auth_ctx = verify_token(token)
 
-    try:
+        user_id = auth_ctx["sub"]
+        role = auth_ctx["role"]
+
         auth = MCP_AUTHZ["ask_ai"]
 
-        allowed = check_access(
-            principal_id=user_id,
-            role=auth["role"],
-            action=auth["action"],
-            resource_kind=auth["resource"],
-            resource_id=auth["resource_id"],
-        )
+        with trace_span("cerbos.ask_ai.check", user_id):
+            allowed = check_access(
+                principal_id=user_id,
+                role=role,
+                action=auth["action"],
+                resource_kind=auth["resource"],
+                resource_id=auth["resource_id"],
+            )
 
         if not allowed:
             raise PermissionError("Cerbos denied ask_ai")
 
-        tool = FLOW_TOOLS["ask_ai"]
+        with trace_span("mcp.ask_ai.invoke", user_id):
+            return await FLOW_TOOLS["ask_ai"].arun({
+                "question": question,
+                "context": build_mcp_context(user_id, role, profile),
+            })
 
-        return await tool.arun({
-            "question": question,
-            "context": build_mcp_context(user_id, profile),
-        })
+async def get_macros(profile, goals, token):
+    with trace_span("ai.macro.total", "anonymous"):
+        with trace_span("auth.jwt.verify", "anonymous"):
+            auth_ctx = verify_token(token)
 
-    except Exception:
-        status = "error"
-        raise
+        user_id = auth_ctx["sub"]
+        role = auth_ctx["role"]
 
-    finally:
-        log_mcp_event({
-            "user_id": user_id,
-            "agent": "qa-agent",
-            "latency_ms": int((time.time() - start) * 1000),
-            "status": status,
-        })
-
-
-
-# -------------------------------------------------
-# Macro Generation Flow
-# -------------------------------------------------
-async def get_macros(profile, goals, user_id):
-    start = time.time()
-    status = "success"
-
-    try:
         auth = MCP_AUTHZ["macro"]
 
-        allowed = check_access(
-            principal_id=user_id,
-            role=auth["role"],
-            action=auth["action"],
-            resource_kind=auth["resource"],
-            resource_id=auth["resource_id"],
-        )
+        with trace_span("cerbos.macro.check", user_id):
+            allowed = check_access(
+                principal_id=user_id,
+                role=role,
+                action=auth["action"],
+                resource_kind=auth["resource"],
+                resource_id=auth["resource_id"],
+            )
 
         if not allowed:
             raise PermissionError("Cerbos denied macro")
 
-        tool = FLOW_TOOLS["macro"]
+        with trace_span("mcp.macro.invoke", user_id):
+            result = await FLOW_TOOLS["macro"].arun({
+                "goals": ", ".join(goals),
+                "context": build_mcp_context(user_id, role, profile),
+            })
 
-        result = await tool.arun({
-            "goals": ", ".join(goals),
-            "context": build_mcp_context(user_id, profile),
-        })
-        if isinstance(result, list):
-            for item in result:
-                if "text" in item:
-                    return item["text"]
-            return ""  # fallback if no text found
-        elif isinstance(result, dict) and "text" in result:
-            return result["text"]
-        elif isinstance(result, str):
-            return result
-        else:
-            return ""
-
-    except Exception:
-        status = "error"
-        raise
-
-    finally:
-        log_mcp_event({
-            "user_id": user_id,
-            "agent": "macro-agent",
-            "latency_ms": int((time.time() - start) * 1000),
-            "status": status,
-        })
+        return result
